@@ -1,0 +1,101 @@
+name: Build mmx8demake.apk
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version. Leave it empty to avoid publishing a release.'
+        required: false
+        type: string
+
+env:
+  GODOT_VERSION: 3.5.3
+  GODOT_RELEASE: 3.5.3-stable
+  EXPORT_NAME: mmx8demake
+
+jobs:
+  android:
+    name: Build APK
+    runs-on: ubuntu-latest      # ships with the Android SDK (apksigner/zipalign) preinstalled
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK (for keytool)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Download Godot 3.5.3 headless + export templates
+        run: |
+          BASE="https://github.com/godotengine/godot/releases/download/${GODOT_RELEASE}"
+          curl -sL -o "$RUNNER_TEMP/godot.zip"     "$BASE/Godot_v${GODOT_RELEASE}_linux_headless.64.zip"
+          curl -sL -o "$RUNNER_TEMP/templates.tpz" "$BASE/Godot_v${GODOT_RELEASE}_export_templates.tpz"
+          unzip -oq "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP"
+          sudo mv "$RUNNER_TEMP/Godot_v${GODOT_RELEASE}_linux_headless.64" /usr/local/bin/godot
+          sudo chmod +x /usr/local/bin/godot
+          unzip -oq "$RUNNER_TEMP/templates.tpz" -d "$RUNNER_TEMP"
+          mkdir -p ~/.local/share/godot/templates/${GODOT_VERSION}.stable
+          mv "$RUNNER_TEMP"/templates/* ~/.local/share/godot/templates/${GODOT_VERSION}.stable/
+
+      - name: Generate debug keystore
+        run: |
+          keytool -keyalg RSA -genkeypair -alias androiddebugkey \
+            -keypass android -keystore "$RUNNER_TEMP/debug.keystore" \
+            -storepass android -validity 9999 -deststoretype pkcs12 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: Configure Godot (Android SDK path + keystore)
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          mkdir -p ~/.config/godot
+          {
+            echo '[gd_resource type="EditorSettings" format=2]'
+            echo ''
+            echo '[resource]'
+            echo "export/android/android_sdk_path = \"${SDK}\""
+            echo "export/android/debug_keystore = \"${RUNNER_TEMP}/debug.keystore\""
+            echo 'export/android/debug_keystore_user = "androiddebugkey"'
+            echo 'export/android/debug_keystore_pass = "android"'
+          } > ~/.config/godot/editor_settings-3.tres
+
+      - name: Export APK
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/build/android"
+          godot -v --path "$GITHUB_WORKSPACE" \
+            --export-debug "Android" "$GITHUB_WORKSPACE/build/android/${EXPORT_NAME}.apk"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: build/android/*.apk
+          if-no-files-found: error
+
+  release:
+    needs: android
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.version != ''
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: apk
+          path: apk
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ inputs.version }}"
+          name: "${{ env.EXPORT_NAME }} v${{ inputs.version }}"
+          files: apk/**/*.apk
+          draft: false
+          prerelease: false
