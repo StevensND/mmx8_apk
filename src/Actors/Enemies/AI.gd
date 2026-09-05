@@ -80,13 +80,13 @@ func on_external_event_heard() -> void:
 		activate_ability(_on_external_event)
 
 func on_screen_exited() -> void:
-	#animated_sprite.visible = false
 	if active:
 		activate_ability(_on_exit_screen)
+		set_physics_process(false)   # freeze AI while off-screen (CPU saver)
 
 func on_screen_entered() -> void:
 	if active:
-		#animated_sprite.visible = true
+		set_physics_process(true)    # resume AI when back on-screen
 		activate_ability(_on_enter_screen)
 
 func on_got_hit() -> void:
